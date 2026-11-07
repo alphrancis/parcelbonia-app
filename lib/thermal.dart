@@ -422,7 +422,7 @@ class _ThresholdEditorState extends State<ThresholdEditor> {
                         if (!mounted) return;
                         setState(() {
                           _saving = false;
-                          if (err == null) _draft = null;
+                          if (err == null || err == kQueued) _draft = null;
                         });
                         if (context.mounted) {
                           toast(context, err ?? 'Fans will now start at ${value.toStringAsFixed(1)} °C.');

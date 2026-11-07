@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show SocketException;
 
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -52,6 +53,7 @@ class Auth {
     final res = await _post(
       'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=$firebaseApiKey',
       {'returnSecureToken': true},
+      timeout: const Duration(seconds: 10),
     );
     final s = Session(res['idToken'], res['refreshToken'], res['localId'], '', _expiry(res['expiresIn']));
     _save(s);
@@ -148,12 +150,13 @@ class Auth {
   static DateTime _expiry(dynamic seconds) =>
       DateTime.now().add(Duration(seconds: int.tryParse('$seconds') ?? 3600));
 
-  static Future<Map<String, dynamic>> _post(String url, Map<String, dynamic> body) async {
+  static Future<Map<String, dynamic>> _post(String url, Map<String, dynamic> body,
+      {Duration timeout = const Duration(seconds: 15)}) async {
     final http.Response r;
     try {
       r = await http
           .post(Uri.parse(url), headers: {'Content-Type': 'application/json'}, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 15));
+          .timeout(timeout);
     } on TimeoutException {
       throw AuthError('The server took too long to answer. Check your connection.');
     } catch (_) {
@@ -229,11 +232,17 @@ class DbStream {
           event = null;
           data.clear();
         }
-      }, onError: (_) => _scheduleRetry(), onDone: _scheduleRetry, cancelOnError: true);
+      }, onError: (_) => _dropped(), onDone: _dropped, cancelOnError: true);
     } catch (_) {
+      if (_closed) return;
       _db._offline();
       _scheduleRetry();
     }
+  }
+
+  void _dropped() {
+    if (!_closed) _db._offline();
+    _scheduleRetry();
   }
 
   void _handle(String event, String raw) {
@@ -290,24 +299,115 @@ class DbStream {
   }
 }
 
+/// Thrown inside [Rtdb] when a write can't reach the server; the write is
+/// queued instead and the caller sees it as "queued", not as an error.
+class _Unreachable implements Exception {}
+
 class Rtdb {
-  Rtdb(this.auth);
+  Rtdb(this.auth) {
+    _loadQueue();
+  }
   final Auth auth;
   final List<DbStream> _streams = [];
   void Function(String state, [String? error])? onLink;
   int lastSync = 0;
 
+  SharedPreferences get _prefs => auth._prefs;
+  static const _kQueue = 'pb-write-queue', _kCache = 'pb-cache:';
+
+  // ------------------------------------------------ offline snapshot cache
+
+  final Map<String, Timer> _cacheTimers = {};
+
+  /// Last snapshot saved for [path], or null.
+  dynamic cached(String path) {
+    final raw = _prefs.getString('$_kCache$path');
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Saves at most every 2 s per path so busy streams don't thrash storage.
+  void _remember(String path, dynamic value) {
+    _cacheTimers[path]?.cancel();
+    _cacheTimers[path] = Timer(const Duration(seconds: 2), () {
+      if (value == null) {
+        _prefs.remove('$_kCache$path');
+      } else {
+        _prefs.setString('$_kCache$path', jsonEncode(value));
+      }
+    });
+  }
+
+  // ------------------------------------------------- offline write queue
+
+  /// Writes made while offline, in order: {m: method, p: path, b: body}.
+  final List<Map<String, dynamic>> _queue = [];
+  bool _flushing = false;
+
+  /// Increases every time a write is queued instead of sent.
+  int queuedTotal = 0;
+  int get pending => _queue.length;
+
+  void _loadQueue() {
+    try {
+      final raw = _prefs.getString(_kQueue);
+      if (raw != null) _queue.addAll((jsonDecode(raw) as List).cast<Map<String, dynamic>>());
+    } catch (_) {}
+  }
+
+  void _saveQueue() => _queue.isEmpty ? _prefs.remove(_kQueue) : _prefs.setString(_kQueue, jsonEncode(_queue));
+
+  void _enqueue(String method, String path, dynamic body) {
+    _queue.add({'m': method, 'p': path, 'b': body});
+    queuedTotal++;
+    _saveQueue();
+  }
+
+  /// Sends queued writes in order; stops at the first one that still fails.
+  Future<void> flush() async {
+    if (_flushing || _queue.isEmpty || auth.session == null) return;
+    _flushing = true;
+    try {
+      while (_queue.isNotEmpty) {
+        final w = _queue.first;
+        try {
+          await _request(w['m'] as String, w['p'] as String, w['b']);
+        } on _Unreachable {
+          return;
+        } catch (_) {
+          // Rejected by the server (rules etc.) — drop it so the queue can't jam.
+        }
+        _queue.removeAt(0);
+        _saveQueue();
+      }
+      onLink?.call('flushed');
+    } finally {
+      _flushing = false;
+    }
+  }
+
   void _synced() {
     lastSync = DateTime.now().millisecondsSinceEpoch;
     onLink?.call('live');
+    flush();
   }
 
-  void _offline() => onLink?.call('connecting');
+  void _offline() => onLink?.call('offline');
   void _error(String e) => onLink?.call('error', e);
   void _signedOut() => onLink?.call('signed-out');
 
+  /// Delivers the cached snapshot right away (works offline), then streams.
   void listen(String path, void Function(dynamic) onValue, {int? limitToLast}) {
-    final s = DbStream(this, path, onValue, limitToLast: limitToLast);
+    final saved = cached(path);
+    if (saved != null) onValue(saved);
+    final s = DbStream(this, path, (v) {
+      _remember(path, v);
+      onValue(v);
+    }, limitToLast: limitToLast);
     _streams.add(s);
     s.start();
   }
@@ -331,14 +431,45 @@ class Rtdb {
   Future<void> put(String path, dynamic v) => _send('PUT', path, v);
   Future<void> merge(String path, Map<String, dynamic> v) => _send('PATCH', path, v);
   Future<void> remove(String path) => _send('DELETE', path);
-  Future<String> push(String path, dynamic v) async => (await _send('POST', path, v))['name'] as String;
+  Future<String> push(String path, dynamic v) async => ((await _send('POST', path, v)) as Map?)?['name'] as String? ?? '';
 
+  /// Reads go straight to the server. Writes are queued (and complete
+  /// normally) when the device is offline, or while older writes are still
+  /// waiting, so they always reach the database in order.
   Future<dynamic> _send(String method, String path, [dynamic body]) async {
+    if (method == 'GET') return _request(method, path, body);
+    if (_queue.isNotEmpty || auth.session == null) {
+      _enqueue(method, path, body);
+      return null;
+    }
+    try {
+      return await _request(method, path, body);
+    } on _Unreachable {
+      _enqueue(method, path, body);
+      _offline();
+      return null;
+    }
+  }
+
+  Future<dynamic> _request(String method, String path, [dynamic body]) async {
     Future<http.Response> go() async {
-      final uri = Uri.parse('$firebaseDbUrl/$path.json').replace(queryParameters: {'auth': await auth.token()});
-      final req = http.Request(method, uri);
-      if (body != null) req.body = jsonEncode(body);
-      return http.Response.fromStream(await req.send()).timeout(const Duration(seconds: 15));
+      try {
+        final uri = Uri.parse('$firebaseDbUrl/$path.json').replace(queryParameters: {'auth': await auth.token()});
+        final req = http.Request(method, uri);
+        if (body != null) req.body = jsonEncode(body);
+        return await http.Response.fromStream(await req.send()).timeout(const Duration(seconds: 10));
+      } on AuthError catch (e) {
+        if (e.message.startsWith('Network') || e.message.contains('too long') || e.message == 'Signed out') {
+          throw _Unreachable();
+        }
+        rethrow;
+      } on TimeoutException {
+        throw _Unreachable();
+      } on http.ClientException {
+        throw _Unreachable();
+      } on SocketException {
+        throw _Unreachable();
+      }
     }
 
     var r = await go();

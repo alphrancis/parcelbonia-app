@@ -129,6 +129,10 @@ class Rec {
 
 enum Phase { booting, ready }
 
+/// Returned by store actions when the write was saved to the offline queue
+/// rather than sent. Treat it as success; it reaches the device once online.
+const kQueued = 'Queued — will send when back online.';
+
 int get nowMs => DateTime.now().millisecondsSinceEpoch;
 
 /// Accepts epoch ms, epoch seconds (ESP RTC) or numeric strings.
@@ -170,7 +174,13 @@ class Store extends ChangeNotifier {
   int now = nowMs;
 
   // ---- database link
-  String link = 'connecting'; // connecting | waiting | live | error | signed-out
+  String link = 'connecting'; // connecting | waiting | live | offline | error | signed-out
+
+  /// True when the database can't be reached; cached data is being shown.
+  bool get offline => link == 'offline';
+
+  /// Writes waiting in the offline queue.
+  int get pendingWrites => db.pending;
   String? linkError;
   bool firstSnapshot = false;
 
@@ -226,10 +236,12 @@ class Store extends ChangeNotifier {
         await Future.delayed(const Duration(milliseconds: 100));
       }
     } catch (e) {
-      // Offline or auth unavailable: open the dashboard anyway and keep retrying.
+      // Offline (e.g. first launch without signal): open the dashboard on the
+      // cached data and keep retrying the sign-in until the connection returns.
       phase = Phase.ready;
-      link = 'error';
-      linkError = '$e';
+      link = 'offline';
+      linkError = null;
+      _attach();
       _retryAuthLater();
     }
     notifyListeners();
@@ -283,7 +295,10 @@ class Store extends ChangeNotifier {
 
   void _onLink(String state, [String? error]) {
     if (state == 'signed-out') return _reauth();
+    if (state == 'flushed') return notifyListeners();
     if (state == 'live' && link == 'live') return;
+    // A stream retrying after a drop shouldn't hide a real error message.
+    if (state == 'offline' && link == 'error') return;
     link = state;
     linkError = error;
     notifyListeners();
@@ -423,8 +438,13 @@ class Store extends ChangeNotifier {
   // Every action returns null on success or an error message.
 
   Future<String?> _try(Future<void> Function() f) async {
+    final before = db.queuedTotal;
     try {
       await f();
+      if (db.queuedTotal > before) {
+        notifyListeners();
+        return kQueued;
+      }
       return null;
     } catch (e) {
       return '$e'.replaceFirst('Exception: ', '');
@@ -463,7 +483,7 @@ class Store extends ChangeNotifier {
     mode = m;
     notifyListeners();
     final err = await _try(() => db.put('$deviceRoot/mode', m.key));
-    if (err != null) {
+    if (err != null && err != kQueued) {
       mode = prev;
       notifyListeners();
     }
@@ -589,6 +609,7 @@ class Store extends ChangeNotifier {
         'live' => 'Realtime Database · synced ${relative(db.lastSync)}',
         'waiting' => 'Connected · waiting for the device',
         'error' => linkError ?? 'Database error',
+        'offline' => 'Offline · showing last saved data',
         'signed-out' => 'Signed out — sign in to stream data',
         _ => 'Connecting to Realtime Database…',
       };
@@ -711,6 +732,7 @@ class Store extends ChangeNotifier {
   void dispose() {
     _ticker.cancel();
     _authRetry?.cancel();
+    db.onLink = null;
     db.closeAll();
     super.dispose();
   }

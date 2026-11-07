@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../connection_banner.dart';
 import '../icons.dart';
 import '../store.dart';
 import '../theme.dart';
@@ -63,6 +64,7 @@ class Shell extends StatelessWidget {
               Column(
                 children: [
                   const _Topbar(),
+                  const ConnectionBanner(),
                   Expanded(
                     child: RefreshIndicator(
                       color: pb.accent,
