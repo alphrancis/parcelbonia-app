@@ -14,6 +14,9 @@ import 'firebase_config.dart';
 class AuthError implements Exception {
   final String message;
   AuthError(this.message);
+
+  /// True when the server couldn't be reached (as opposed to refusing us).
+  bool get isNetwork => message.startsWith('Network') || message.contains('too long');
   @override
   String toString() => message;
 }
@@ -171,6 +174,9 @@ class Auth {
     final code = (body is Map ? (body['error']?['message'] ?? '') : '').toString();
     if (code.contains('INVALID_LOGIN_CREDENTIALS') || code.contains('INVALID_PASSWORD') || code.contains('EMAIL_NOT_FOUND')) {
       return 'Incorrect email or password.';
+    }
+    if (code.contains('ADMIN_ONLY_OPERATION') || code.contains('OPERATION_NOT_ALLOWED')) {
+      return 'Anonymous sign-in is turned off. Enable it in Firebase → Authentication → Sign-in method.';
     }
     if (code.contains('INVALID_EMAIL')) return 'Enter a valid email address.';
     if (code.contains('USER_DISABLED')) return 'This account has been disabled.';
@@ -459,7 +465,7 @@ class Rtdb {
         if (body != null) req.body = jsonEncode(body);
         return await http.Response.fromStream(await req.send()).timeout(const Duration(seconds: 10));
       } on AuthError catch (e) {
-        if (e.message.startsWith('Network') || e.message.contains('too long') || e.message == 'Signed out') {
+        if (e.isNetwork || e.message == 'Signed out') {
           throw _Unreachable();
         }
         rethrow;

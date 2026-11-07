@@ -30,7 +30,9 @@ class _ConnectionBannerState extends State<ConnectionBanner> {
     if (offline && !_visible && _timer == null) {
       _timer = Timer(_delay, () {
         _timer = null;
-        if (mounted && context.storeRead.offline) setState(() => _visible = true);
+        if (!mounted) return;
+        final st = context.storeRead;
+        if (st.offline || st.link == 'error' || st.link == 'signed-out') setState(() => _visible = true);
       });
     } else if (!offline) {
       _timer?.cancel();
@@ -43,9 +45,10 @@ class _ConnectionBannerState extends State<ConnectionBanner> {
   Widget build(BuildContext context) {
     final s = context.store;
     final pb = context.pb;
-    _sync(s.offline);
+    final refused = s.link == 'error' || s.link == 'signed-out';
+    _sync(s.offline || refused);
     final pending = s.pendingWrites;
-    final c = pb.modeMaintenance;
+    final c = refused ? pb.danger : pb.modeMaintenance;
 
     return AnimatedSize(
       duration: const Duration(milliseconds: 280),
@@ -63,17 +66,19 @@ class _ConnectionBannerState extends State<ConnectionBanner> {
                   tint: c,
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   child: Row(children: [
-                    PIcon('wifi', size: 17, color: c),
+                    PIcon(refused ? 'shield' : 'wifi', size: 17, color: c),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Offline — showing last saved data',
+                        Text(refused ? "Can't connect to the database" : 'Offline — showing last saved data',
                             style: body(12, weight: FontWeight.w600, color: pb.text)),
                         const SizedBox(height: 2),
                         Text(
-                          pending == 0
-                              ? 'Commands will send when back online.'
-                              : '$pending command${pending == 1 ? '' : 's'} queued · will send when back online.',
+                          refused
+                              ? (s.linkError ?? 'The database refused the connection.')
+                              : pending == 0
+                                  ? 'Commands will send when back online.'
+                                  : '$pending command${pending == 1 ? '' : 's'} queued · will send when back online.',
                           style: body(11, color: pb.muted),
                         ),
                       ]),

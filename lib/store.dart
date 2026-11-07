@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_config.dart';
 import 'rtdb.dart';
+import 'secrets.dart';
 
 /// App state, mirrored live from devices/PB-01 in the Realtime Database.
 /// Paths and shapes match the website (data/device-config.js, data/rtdb.js)
@@ -236,27 +237,37 @@ class Store extends ChangeNotifier {
         await Future.delayed(const Duration(milliseconds: 100));
       }
     } catch (e) {
-      // Offline (e.g. first launch without signal): open the dashboard on the
-      // cached data and keep retrying the sign-in until the connection returns.
+      // Open the dashboard on cached data and keep retrying the sign-in.
+      // Only a network failure counts as offline; if Firebase answered but
+      // refused (e.g. wrong account password), show that reason instead.
       phase = Phase.ready;
-      link = 'offline';
-      linkError = null;
+      final refused = e is AuthError && !e.isNetwork;
+      link = refused ? 'error' : 'offline';
+      linkError = refused ? e.message : null;
       _attach();
       _retryAuthLater();
     }
     notifyListeners();
   }
 
+  /// Signs in silently with the app's built-in Firebase account (from the
+  /// git-ignored lib/secrets.dart), reusing the saved session when possible.
   Future<void> _ensureSession() async {
+    final email = appAccountEmail.trim();
     if (auth.hasSavedSession) {
       try {
         await auth.restore();
-        return;
+        // Reuse it only if it belongs to the app account.
+        if (auth.session?.email.toLowerCase() == email.toLowerCase()) return;
+        auth.signOut();
       } on AuthError {
         // Saved session no longer valid: fall through to a fresh one.
       }
     }
-    await auth.signInAnonymously();
+    if (!email.contains('@') || appAccountPassword.startsWith('REPLACE')) {
+      throw AuthError('No app account set. Add appAccountEmail and appAccountPassword to lib/secrets.dart.');
+    }
+    await auth.signIn(email, appAccountPassword);
   }
 
   Timer? _authRetry;
