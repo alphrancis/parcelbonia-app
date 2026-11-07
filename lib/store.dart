@@ -61,15 +61,15 @@ class Actuator {
   final bool relay;
   final String onLabel, offLabel;
   const Actuator(this.id, this.name, this.note, {this.relay = true, this.onLabel = 'On', this.offLabel = 'Off'});
-  bool get isFan => id.startsWith('fan');
+  bool get isFan => id == 'fans';
 }
 
 const actuators = [
   Actuator('lock', 'Solenoid lock', 'Relay channel 1 · momentary unlock', onLabel: 'Unlocked', offLabel: 'Locked'),
   Actuator('led', 'Interior LED', 'Relay channel 2 · on/off only'),
   Actuator('lcd', '16x2 LCD', 'Writes one line to the display', relay: false),
-  Actuator('fanIntake', 'Intake fan', 'Relay channel 3 · pulls cool air into the hub', onLabel: 'Running', offLabel: 'Stopped'),
-  Actuator('fanExhaust', 'Exhaust fan', 'Relay channel 4 · pushes warm air out', onLabel: 'Running', offLabel: 'Stopped'),
+  // Intake and exhaust fans are wired to the same relay, so they always run together.
+  Actuator('fans', 'Cooling fans', 'Relay channel 3 · intake + exhaust run together', onLabel: 'Running', offLabel: 'Stopped'),
 ];
 
 /// Fan threshold limits the app allows (°C).
@@ -181,7 +181,7 @@ class Store extends ChangeNotifier {
   // ---- devices/PB-01
   Mode mode = Mode.auto;
   final Map<String, Reading> live = {};
-  final Map<String, bool> relays = {'lock': false, 'led': false, 'fanIntake': false, 'fanExhaust': false};
+  final Map<String, bool> relays = {'lock': false, 'led': false, 'fans': false};
   final Map<String, int> actuatorTs = {};
   String lcdMessage = '';
   Map<String, dynamic> rfidInput = {}, keypadInput = {};
@@ -610,7 +610,7 @@ class Store extends ChangeNotifier {
   // ------------------------------------------------------------ cooling
 
   double? get hubTemp => asleep ? null : (num.tryParse('${live['temperature']?.value ?? ''}'))?.toDouble();
-  bool get fansOn => (relays['fanIntake'] ?? false) || (relays['fanExhaust'] ?? false);
+  bool get fansOn => relays['fans'] ?? false;
 
   /// ok | warm (within 3 °C of the threshold) | hot (at/over it) | none
   String get hubLevel {

@@ -120,9 +120,10 @@ class ThermalCard extends StatelessWidget {
           // fans
           Row(
             children: [
-              for (final (i, a) in actuators.where((a) => a.isFan).indexed) ...[
+              // Both fans share one relay, so they always show the same state.
+              for (final (i, name) in const ['Intake fan', 'Exhaust fan'].indexed) ...[
                 if (i > 0) const SizedBox(width: 12),
-                Expanded(child: FanTile(a)),
+                Expanded(child: FanTile(name)),
               ],
             ],
           ),
@@ -226,8 +227,8 @@ class HubGauge extends StatelessWidget {
 
 /// One fan with its relay state; the icon spins while the fan runs.
 class FanTile extends StatefulWidget {
-  final Actuator fan;
-  const FanTile(this.fan, {super.key});
+  final String name;
+  const FanTile(this.name, {super.key});
   @override
   State<FanTile> createState() => _FanTileState();
 }
@@ -245,7 +246,7 @@ class _FanTileState extends State<FanTile> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     final s = context.store;
     final pb = context.pb;
-    final on = !s.asleep && (s.relays[widget.fan.id] ?? false);
+    final on = !s.asleep && s.fansOn;
     if (on && !_spin.isAnimating) _spin.repeat();
     if (!on && _spin.isAnimating) _spin.stop();
     final c = on ? pb.accent : pb.muted;
@@ -270,14 +271,14 @@ class _FanTileState extends State<FanTile> with SingleTickerProviderStateMixin {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  widget.fan.name,
+                  widget.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: body(12, weight: FontWeight.w600),
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  s.actuatorText(widget.fan),
+                  s.actuatorText(actuators.firstWhere((a) => a.isFan)),
                   maxLines: 1,
                   style: body(10.5, color: c, weight: FontWeight.w500),
                 ),

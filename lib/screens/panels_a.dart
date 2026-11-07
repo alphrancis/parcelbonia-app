@@ -482,7 +482,7 @@ class _MaintenancePanelState extends State<MaintenancePanel> {
         ),
       ),
       const LiveHead('Cooling', 'Components hub',
-          note: 'Test the fans below in maintenance mode. The threshold applies to automatic operation and can be changed any time.'),
+          note: 'Both fans share one relay, so the Cooling fans switch below tests them together. The threshold can be changed any time.'),
       const ThermalCard(editable: true),
       const LiveHead('Actuator control', 'Output devices', note: 'Each control queues one command at commands/.'),
       RGrid(minItem: 280, maxCols: 3, spacing: 12, children: [for (final a in actuators) actuatorCard(a)]),

@@ -68,7 +68,7 @@ void _fill(Store s) {
     ..['door'] = Reading(0, t)
     ..['battery'] = Reading(22, t)
     ..['temperature'] = Reading(41.6, t);
-  s.relays['fanIntake'] = true;
+  s.relays['fans'] = true;
   s.heartbeat = t;
   s.actuatorTs['lock'] = t;
   s.rfidInput = {'uid': '04A1B2A3F2', 'name': 'Rene’s card with a long name', 'ts': t};
