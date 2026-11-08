@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
-/// Animated splash: the PB shield draws in over pulsing rings while the
+/// Animated splash: the app icon scales in over pulsing rings while the
 /// saved session is restored and the first database snapshot arrives.
 class SplashScreen extends StatefulWidget {
   final Future<void> Function() boot;
@@ -50,6 +50,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     final pb = context.pb;
     final shortest = MediaQuery.sizeOf(context).shortestSide;
     final mark = (shortest * .2).clamp(64.0, 112.0);
+    final logo = (shortest * .66).clamp(180.0, 264.0);
 
     final markIn = CurvedAnimation(parent: _intro, curve: const Interval(0, .55, curve: Curves.easeOutBack));
     final wordIn = CurvedAnimation(parent: _intro, curve: const Interval(.35, .8, curve: Curves.easeOutCubic));
@@ -99,12 +100,12 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                 opacity: markIn.value.clamp(0, 1),
                 child: Transform.scale(scale: .6 + .4 * markIn.value, child: child),
               ),
-              child: Glass(
-                radius: mark * .42,
-                blur: 30,
-                elevated: true,
-                padding: EdgeInsets.all(mark * .28),
-                child: BrandMark(width: mark),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(logo * .225),
+                  boxShadow: [BoxShadow(color: PB.tint(pb.accent, .25), blurRadius: 40, spreadRadius: 2)],
+                ),
+                child: Image.asset('assets/icon/app_icon_rounded.png', width: logo, height: logo, filterQuality: FilterQuality.high),
               ),
             ),
             SizedBox(height: mark * .35),
